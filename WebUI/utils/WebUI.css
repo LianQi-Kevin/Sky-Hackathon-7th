@@ -1,0 +1,14 @@
+#ASR_load_model {
+    height: 40px;
+    max-height: 40px;
+}
+
+#ASR_kill_model{
+    height: 40px;
+    max-height: 40px;
+}
+
+#ASR_detection{
+    height: 40px;
+    max-height: 40px;
+}
