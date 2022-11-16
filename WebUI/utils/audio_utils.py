@@ -1,5 +1,4 @@
 import os
-import numpy as np
 from librosa import resample as lib_resample
 from soundfile import write as sf_write
 from soundfile import read as sf_read
