@@ -1,7 +1,5 @@
-import argparse
 import os
 import time
-import uuid
 from math import ceil
 
 import cv2
@@ -13,11 +11,11 @@ from torch import cat as torch_cat
 from torch import max as torch_max
 from torch.tensor import Tensor
 from torchvision.ops import batched_nms
-# from yolox.exp import get_exp
-# from yolox.utils import vis
 from loguru import logger
+from copy import copy
 
 
+# Global var
 _COLORS = np.array(
     [
         0.000, 0.447, 0.741,
@@ -139,23 +137,19 @@ def vis(img, boxes, scores, cls_ids, conf=0.5, class_names=None):
 
 @logger.catch
 class YOLOV7_TRT_Detection(object):
-    # def __init__(self, engine_file_path, exp, cls_list, batch_size=1, fp16=False):
     def __init__(self, engine_file_path, cls_list, batch_size=1, fp16=False):
         # basic参数
         self.engine_file_path = engine_file_path
         self.engine = self._load_engine()
         print("Successful load {}".format(os.path.basename(self.engine_file_path)))
-        # self.exp = exp
         self.cls_list = cls_list
         self.fp16 = fp16
         self.batch_size = batch_size
 
         # exp参数
-        # self.exp_height = exp.input_size[0]
-        # self.exp_width = exp.input_size[1]
-        self.exp_height = 416
-        self.exp_width = 416
-        self.num_classes = 80
+        self.exp_height = 640
+        self.exp_width = 640
+        self.num_classes = len(self.cls_list)
 
         # detect参数
         self.host_inputs = []
@@ -163,7 +157,7 @@ class YOLOV7_TRT_Detection(object):
         self.host_outputs = []
         self.cuda_outputs = []
         self.bindings = []
-        self.stream = cuda.Stream()
+        self.stream = cuda.Stream(0)
         self.context = self._create_context()
 
     def detect(self, img_resized):
@@ -185,13 +179,6 @@ class YOLOV7_TRT_Detection(object):
     def visual(self, output, img, cls_conf=0.35):
         if len(output) == 0:
             return img
-        # output = np.array(output, dtype=object)
-        # ratio = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
-        # bandboxes = output[:, 0:4]
-        # # preprocessing: resize
-        # bandboxes /= ratio
-        # scores = output[:, 4]
-        # classes = output[:, 5]
         bandboxes, scores, classes = self.remapping_result(output, img)
 
         vis_res = vis(img=img, boxes=bandboxes, scores=scores, cls_ids=classes,
@@ -256,7 +243,7 @@ class YOLOV7_TRT_Detection(object):
         image_pred = prediction
         class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)
         conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= conf).squeeze()
-        detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(8400, 1) * class_conf, class_pred.float()],
+        detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(25200, 1) * class_conf, class_pred.float()],
                                dim=1)
         detections = detections[conf_mask]
 
@@ -315,11 +302,21 @@ class YOLOV7_TRT_Detection(object):
         # get detections
         output = [None for _ in range(len(prediction))]
         for i, image_pred in enumerate(prediction):
-            # image_pred = prediction
+            if i == 0:
+                with open("data.txt", "w") as f:
+                    f.write(str(copy(image_pred).tolist()))
+
+            # torch.max方法 提取类conf最高的值及其索引位置
             class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)
+            # conf * class_conf, squeeze() 消除所有空白维度 eg:(2, 1, 2, 2, 1) -> (2, 2, 2)
+            # 判断该项是否大于conf 返回True/False
             conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= conf).squeeze()
+            # 拆分维度并整理
+            # int(host_outputs.shape[0] / team_num / batch_size) 从 1*25200*85 还原到 25200
+            # 转成[[x1, y1, x2, y2, score, idx], [x1, y1, x2, y2, score, idx], ...]
             detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(int(host_outputs.shape[0] / team_num / batch_size), 1) * class_conf, class_pred.float()],
                                    dim=1)
+            # 如果conf_mask为True, 则使用, 否则None
             detections = detections[conf_mask]
 
             # iou nms
@@ -369,224 +366,5 @@ class YOLOV7_TRT_Detection(object):
         del self.cuda_inputs
 
 
-def make_args():
-    parser = argparse.ArgumentParser("YOLOX TRT DETECT!")
-    parser.add_argument("-tp", "--trt_path", default=None, type=str,
-                        help="please input your trt model path")
-    parser.add_argument("-f", "--exp_file", default=None, type=str,
-                        help="please input your experiment description file")
-    parser.add_argument("-d", "--images_dir", default="./images", type=str,
-                        help="Picture folder in directory detection mode")
-    parser.add_argument("-b", "--batch_size", default=1, type=int,
-                        help="model detect batch size")
-    parser.add_argument("--conf", default=0.3, type=float, help="test conf")
-    parser.add_argument("--nms", default=0.3, type=float, help="test nms threshold")
-    parser.add_argument("--tsize", default=None, type=int, help="test img size")
-    parser.add_argument("--fp16", type=bool, default=False,
-                        help="Adopting mix precision evaluating.")
-    parser.add_argument("-o", "--result_path", default=None, type=str,
-                        help="result path")
-
-    return parser.parse_args()
-
-
-def get_image_list(path):
-    image_names = []
-    for main_dir, subdir, file_name_list in os.walk(path):
-        for filename in file_name_list:
-            a_path = os.path.join(main_dir, filename)
-            ext = os.path.splitext(a_path)[1]
-            if ext in [".jpg", ".jpeg", ".webp", ".bmp", ".png"]:
-                image_names.append(a_path)
-    return image_names
-
-
-def main_one(args):
-    # MyExp = get_exp(exp_file=args.exp_file)
-    detection = YOLOV7_TRT_Detection(
-        engine_file_path=args.trt_path,
-        # exp=MyExp,
-        cls_list=args.cls_list,
-        fp16=args.fp16)
-
-    ST_time = time.time()
-    img_name = "images/2007_000799.jpg"
-    resized_img, _, source_img = detection.pre_process(img_name, un_read=True)
-    preprocess_time = time.time()
-    print("preprocess: {}".format(preprocess_time - ST_time))
-    outputs = detection.detect(img_resized=resized_img)
-    detect_time = time.time()
-    print("all detect: {}".format(detect_time - preprocess_time))
-    prediction = detection.post_process(host_outputs=outputs, conf=0.45, nms=0.45)
-
-    if args.result_path is not None:
-        result_path = os.path.join(args.result_path,
-                                   "{}_{}".format("yolov7", time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-        if not os.path.exists(result_path):
-            os.makedirs(result_path)
-        vis_img = detection.visual(output=prediction, img=source_img, cls_conf=0.35)
-        cv2.imwrite(os.path.join(result_path, os.path.basename(img_name)), vis_img)
-
-
-def main_dir_async(args):
-    # 如果待检测文件夹存在则创建文件列表
-    global resized_img
-    global basic_num
-    assert os.path.exists(args.images_dir), "{} not exists".format(args.images_dir)
-    # image_list = get_image_list(args.images_dir)
-    image_list = [cv2.imread(img, cv2.IMREAD_COLOR) for img in get_image_list(args.images_dir)]
-    print("{} images in {}".format(len(image_list), args.images_dir))
-    # print(image_list)
-
-    # 加载检测器
-    # MyExp = get_exp(exp_file=args.exp_file)
-    detection = YOLOV7_TRT_Detection(
-        engine_file_path=args.trt_path,
-        # exp=MyExp,
-        cls_list=args.cls_list,
-        fp16=args.fp16)
-
-    basic_num = 0
-    outputs = {}
-    async_time = time.time()
-    for index, img in enumerate(image_list):
-        # preprocess
-        resized_img, _, source_img = detection.pre_process(img=img, un_read=False)
-        print("finish preprocess: {} - {}".format(basic_num, time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-        outputs[index] = {"img": source_img}
-        if index != 0:
-            detection.stream.synchronize()
-            print("finish detect: {} - {}".format(basic_num - 1, time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-            basic_num += 1
-
-        # detect
-        print("start detect: {} - {}".format(basic_num, time.localtime()))
-        detection.detect(resized_img)
-        time.sleep(0.005)
-        if index == 0 or img == image_list[-1]:
-            detection.stream.synchronize()
-            print("finish detect: {} - {}".format(basic_num, time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-            basic_num += 1
-
-        # postprocess
-        if basic_num - 1 == index or img == image_list[-1]:
-            output = detection.post_process(detection.host_outputs[0])
-            print("finish postprocess: {} - {}".format(basic_num, time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-            print(output)
-
-            outputs[index]["output"] = output
-        print("once time: {}".format(time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-
-    print("async time: {}".format(time.time() - async_time))
-    print("output shape: {}".format(len(outputs)))
-    # exit()
-    # draw output
-    result_path = os.path.join(args.result_path,
-                               "{}_{}".format("yolov7", time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-    if not os.path.exists(result_path):
-        os.makedirs(result_path)
-    for index, output in enumerate(outputs.values()):
-        vis_img = detection.visual(output=output["output"], img=output["img"], cls_conf=0.35)
-        cv2.imwrite(os.path.join(result_path, "{}.jpg".format(index)), vis_img)
-
-
-def main_dir_serial(args):
-    # 如果待检测文件夹存在则创建文件列表
-    assert os.path.exists(args.images_dir), "{} not exists".format(args.images_dir)
-    # image_list = get_image_list(args.images_dir)
-    image_list = [cv2.imread(img, cv2.IMREAD_COLOR) for img in get_image_list(args.images_dir)]
-    print("{} images in {}".format(len(image_list), args.images_dir))
-
-    # 加载检测器
-    # MyExp = get_exp(exp_file=args.exp_file)
-    detection = YOLOV7_TRT_Detection(
-        engine_file_path=args.trt_path,
-        # exp=MyExp,
-        cls_list=args.cls_list,
-        fp16=args.fp16)
-
-    output = []
-    async_time = time.time()
-    for index, img in enumerate(image_list):
-        resized_img, _, source_img = detection.pre_process(img=img, un_read=False)
-        host_outputs = detection.detect(resized_img)
-        detection.stream.synchronize()
-        output.append(detection.post_process(host_outputs))
-    print("serial time: {}".format(time.time() - async_time))
-    print("output shape: {}".format(len(output)))
-
-
-def main_dir_serial_batch(args):
-    # 如果待检测文件夹存在则创建文件列表
-    assert os.path.exists(args.images_dir), "{} not exists".format(args.images_dir)
-    assert os.path.exists(args.trt_path), "{} not exists".format(args.trt_path)
-    # image_list = get_image_list(args.images_dir)
-    image_list = [cv2.imread(img, cv2.IMREAD_COLOR) for img in get_image_list(args.images_dir)]
-    print("{} images in {}".format(len(image_list), args.images_dir))
-
-    # 加载检测器
-    # MyExp = get_exp(exp_file=args.exp_file)
-    detection = YOLOV7_TRT_Detection(
-        engine_file_path=args.trt_path,
-        # exp=MyExp,
-        cls_list=args.cls_list,
-        batch_size=args.batch_size,
-        fp16=args.fp16)
-
-    # draw output
-    result_path = os.path.join(args.result_path,
-                               "{}_{}".format("yolov7", time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-    if not os.path.exists(result_path):
-        os.makedirs(result_path)
-
-    outputs = []
-    async_time = time.time()
-    for index, preprocess_return in enumerate(detection.pre_process_batch(image_list, args.batch_size, un_read=False)):
-        img_group = preprocess_return[0]
-        source_images = preprocess_return[1]
-        print(img_group.shape)
-        # detect
-        ST_time = time.time()
-        print("start detect: {} - {}".format(index, ST_time))
-        output = detection.detect(img_group)
-        np_result_path = os.path.join(result_path, "{}_{}.npy".format(detection.exp.exp_name, index))
-        detection.stream.synchronize()
-        FINDET_time = time.time()
-        print("finish detect {} - {}".format(index, FINDET_time - ST_time))
-        output = detection.post_process_batch(host_outputs=output, batch_size=args.batch_size,
-                                              result_path=np_result_path)
-        print("post process: {} - {}".format(index, time.time() - FINDET_time))
-        outputs.append([[out.tolist() for out in output], source_images])
-        print([out.tolist() for out in output])
-        # pass
-        print("once time: {}".format(time.time() - ST_time))
-
-    for num, output in enumerate(outputs):
-        out = output[0]
-        img_group = output[1]
-        for a in range(len(img_group)):
-            vis_img = detection.visual(output=out[a], img=img_group[a], cls_conf=0.35)
-            cv2.imwrite(os.path.join(result_path, "{}_{}.jpg".format(num, uuid.uuid4())), vis_img)
-
-    print("async time: {}".format(time.time() - async_time))
-    print("output shape: {}".format(len(outputs)))
-
-
 if __name__ == '__main__':
-    # args
-    args = make_args()
-
-    # 主定义参数
-    args.exp_file = "../selfEXP.py"
-    args.trt_path = "../models/yolov7_default.fp16.trt"
-    # args.trt_path = "../models/yolox-m/yolox-m-batch8_upsample_dynamic.fp16.trt"
-    args.fp16 = True
-    args.result_path = "../result"
-    args.images_dir = "../test_images"
-    args.cls_list = [str(i + 1) for i in range(80)]
-    # print(args.cls_list)
-
-    # main_one(args)
-    # main_dir_async(args)
-    # main_dir_serial(args)
-    # main_dir_serial_batch(args)
+    pass
