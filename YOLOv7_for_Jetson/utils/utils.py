@@ -3,7 +3,6 @@ import os
 import time
 import uuid
 import cv2
-import numpy as np
 from trtpy_for_YOLOV7_async import YOLOV7_TRT_Detection
 
 
@@ -39,33 +38,7 @@ def get_image_list(path):
     return image_names
 
 
-def main_one(args):
-    detection = YOLOV7_TRT_Detection(
-        engine_file_path=args.trt_path,
-        # exp=MyExp,
-        cls_list=args.cls_list,
-        fp16=args.fp16)
-
-    ST_time = time.time()
-    img_name = "../test_images/zidane.jpg"
-    resized_img, _, source_img = detection.pre_process(img_name, un_read=True)
-    preprocess_time = time.time()
-    print("preprocess: {}".format(preprocess_time - ST_time))
-    outputs = detection.detect(img_resized=resized_img)
-    detect_time = time.time()
-    print("all detect: {}".format(detect_time - preprocess_time))
-    prediction = detection.post_process_batch(host_outputs=outputs, batch_size=1, conf=0.45, nms=0.45)
-
-    if args.result_path is not None:
-        result_path = os.path.join(args.result_path,
-                                   "{}_{}".format("yolov7", time.strftime("%Y%m%d-%H%M%S", time.localtime())))
-        if not os.path.exists(result_path):
-            os.makedirs(result_path)
-        vis_img = detection.visual(output=prediction, img=source_img, cls_conf=0.35)
-        cv2.imwrite(os.path.join(result_path, os.path.basename(img_name)), vis_img)
-
-
-def main_dir_async(args):
+def main_dir_async_batch(args):
     # 如果待检测文件夹存在则创建文件列表
     global resized_img
     global basic_num
@@ -73,13 +46,10 @@ def main_dir_async(args):
     # image_list = get_image_list(args.images_dir)
     image_list = [cv2.imread(img, cv2.IMREAD_COLOR) for img in get_image_list(args.images_dir)]
     print("{} images in {}".format(len(image_list), args.images_dir))
-    # print(image_list)
 
     # 加载检测器
-    # MyExp = get_exp(exp_file=args.exp_file)
     detection = YOLOV7_TRT_Detection(
         engine_file_path=args.trt_path,
-        # exp=MyExp,
         cls_list=args.cls_list,
         fp16=args.fp16)
 
@@ -127,32 +97,6 @@ def main_dir_async(args):
         cv2.imwrite(os.path.join(result_path, "{}.jpg".format(index)), vis_img)
 
 
-def main_dir_serial(args):
-    # 如果待检测文件夹存在则创建文件列表
-    assert os.path.exists(args.images_dir), "{} not exists".format(args.images_dir)
-    # image_list = get_image_list(args.images_dir)
-    image_list = [cv2.imread(img, cv2.IMREAD_COLOR) for img in get_image_list(args.images_dir)]
-    print("{} images in {}".format(len(image_list), args.images_dir))
-
-    # 加载检测器
-    # MyExp = get_exp(exp_file=args.exp_file)
-    detection = YOLOV7_TRT_Detection(
-        engine_file_path=args.trt_path,
-        # exp=MyExp,
-        cls_list=args.cls_list,
-        fp16=args.fp16)
-
-    output = []
-    async_time = time.time()
-    for index, img in enumerate(image_list):
-        resized_img, _, source_img = detection.pre_process(img=img, un_read=False)
-        host_outputs = detection.detect(resized_img)
-        detection.stream.synchronize()
-        output.append(detection.post_process(host_outputs))
-    print("serial time: {}".format(time.time() - async_time))
-    print("output shape: {}".format(len(output)))
-
-
 def main_dir_serial_batch(args):
     # 如果待检测文件夹存在则创建文件列表
     assert os.path.exists(args.images_dir), "{} not exists".format(args.images_dir)
@@ -162,10 +106,8 @@ def main_dir_serial_batch(args):
     print("{} images in {}".format(len(image_list), args.images_dir))
 
     # 加载检测器
-    # MyExp = get_exp(exp_file=args.exp_file)
     detection = YOLOV7_TRT_Detection(
         engine_file_path=args.trt_path,
-        # exp=MyExp,
         cls_list=args.cls_list,
         batch_size=args.batch_size,
         fp16=args.fp16)
@@ -178,10 +120,9 @@ def main_dir_serial_batch(args):
 
     outputs = []
     async_time = time.time()
-    for index, preprocess_return in enumerate(detection.pre_process_batch(image_list, args.batch_size, un_read=False)):
+    for index, preprocess_return in enumerate(detection.pre_process_batch_yolov7(image_list, args.batch_size, un_read=False)):
         img_group = preprocess_return[0]
         source_images = preprocess_return[1]
-        print(img_group.shape)
         # detect
         ST_time = time.time()
         print("start detect: {} - {}".format(index, ST_time))
@@ -202,7 +143,6 @@ def main_dir_serial_batch(args):
         out = output[0]
         img_group = output[1]
         for a in range(len(img_group)):
-            # vis_img = detection.visual(output=out[a], img=img_group[a], cls_conf=0.35)
             vis_img = detection.visual(output=out[a], img=img_group[a], cls_conf=0.6)
             cv2.imwrite(os.path.join(result_path, "{}_{}.jpg".format(num, uuid.uuid4())), vis_img)
 
@@ -215,25 +155,21 @@ if __name__ == '__main__':
     args = make_args()
 
     # 主定义参数
-    args.exp_file = "../selfEXP.py"
+    # args.exp_file = "../selfEXP.py"
     args.trt_path = "../models/01/yolov7_default.fp16.trt"
-    # args.trt_path = "../models/yolox-m/yolox-m-batch8_upsample_dynamic.fp16.trt"
     args.fp16 = True
     args.result_path = "../result"
-    args.images_dir = "../test_images"
-    args.cls_list = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
-                     "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
-                     "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
-                     "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
-                     "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
-                     "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-                     "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
-                     "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-                     "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book",
-                     "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
-    # print(args.cls_list)
+    args.images_dir = "../infer_images"
+    args.cls_list = ["banana", "CARDBOARD", "bottle"]
+    # args.cls_list = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    #                  "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    #                  "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    #                  "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    #                  "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    #                  "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    #                  "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    #                  "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
+    #                  "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book",
+    #                  "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"]
 
-    # main_one(args)
-    # main_dir_async(args)
-    # main_dir_serial(args)
     main_dir_serial_batch(args)

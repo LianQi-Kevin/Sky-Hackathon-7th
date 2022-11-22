@@ -1,11 +1,13 @@
-# import os
+import os
 # import numpy as np
 import gradio as gr
+# os.system("pip3 install gradio")
+# exit()
 # import cv2
 # from PIL import Image
 from ASR_metrics import utils as metrics
-
-from utils.audio_utils import audio_save
+import argparse
+from web_utils.audio_utils import audio_save
 
 # global variable
 LoadModelType = False
@@ -99,10 +101,17 @@ class ASR_components:
             return "DETECT ERROR", "DETECT ERROR", "DETECT ERROR"
 
 
+# CV components function
+# class CV_components:
+#     @staticmethod
+#
+#     def load_engine:
+
+
 # Web page
-def UI():
+def UI(args):
     # gr.Column()   垂直      | gr.ROW()  水平
-    with gr.Blocks(title="Sky Hackathon 7th 无辑", css="utils/WebUI.css") as demo:
+    with gr.Blocks(title="Sky Hackathon 7th 无辑", css="WebUI/utils/WebUI.css") as demo:
         gr.Markdown(
             """
             <h2 align="center" face="STCAIYUN">Sky Hackathon 7th —— 无辑</h2>
@@ -113,15 +122,16 @@ def UI():
             # ASR Block
             with gr.Column():
                 gr.Markdown("""<h3 align="center">ASR</h3>""")
-                with gr.Row():
-                    ASR_loadModel = gr.Button(value="Load Model", elem_id="ASR_load_model")
-                    ASR_killModel = gr.Button(value="free memory", elem_id="ASR_kill_model")
-                correct_answer = gr.Textbox(value="请检测出纸箱", lines=1, max_lines=1,
-                                            show_label=True, interactive=True, label="Type correct word")
-                with gr.Group():
-                    audio_components = gr.Audio(label="Audio to be detected", source="upload",
-                                                type="filepath", interactive=True, show_label=True)
-                    micro_type = gr.Checkbox(label="Use microphone", value=False)
+                with gr.Box():
+                    with gr.Row():
+                        ASR_loadModel = gr.Button(value="Load Model", elem_id="ASR_load_model")
+                        ASR_killModel = gr.Button(value="free memory", elem_id="ASR_kill_model")
+                    correct_answer = gr.Textbox(value="请检测出纸箱", lines=1, max_lines=1,
+                                                show_label=True, interactive=True, label="Type correct word")
+                    with gr.Group():
+                        audio_components = gr.Audio(label="Audio to be detected", source="upload",
+                                                    type="filepath", interactive=True, show_label=True)
+                        micro_type = gr.Checkbox(label="Use microphone", value=False)
 
                 ASR_startDetection = gr.Button(value="Start Detection", variant="primary", elem_id="ASR_detection",
                                                visible=False)
@@ -134,17 +144,35 @@ def UI():
             with gr.Column():
                 gr.Markdown("""<h3 align="center">CV</h3>""")
 
+                with gr.Box():
+                    with gr.Row():
+                        CV_loadModel = gr.Button(value="Load Model", elem_id="CV_load_model")
+                        CV_killModel = gr.Button(value="free memory", elem_id="CV_kill_model")
+                    category_list = gr.CheckboxGroup(choices=args.category_list, label="Category to be checked out",
+                                                     show_label=True, type="value", interactive=True,
+                                                     value=[args.category_list[0], args.category_list[1]])
+                    detect_mode = gr.Radio(choices=["Single Img", "mAP", "Video"], label="Detection Mode",
+                                           show_label=True, type="value", value="Single Img", interactive=True)
+                CV_startDetection = gr.Button(value="Start Detection", variant="primary", elem_id="CV_detection")
+
+                with gr.Box(visible=True) as single_img_mode:
+                    with gr.Column():
+                        input_img = gr.Image()
+
+                CV_json_result = gr.Json(label="Detection Result", show_label=True, visible=True)
+
         # ASR action
         micro_type.change(ASR_components.audio_type_change, inputs=[micro_type], outputs=[audio_components])
         audio_components.change(ASR_components.update_audio, [], [ASR_startDetection, ASR_result_group])
         audio_components.clear(ASR_components.clear_audio, [], [ASR_startDetection, ASR_result_group])
-
         ASR_killModel.click(ASR_components.ASR_model_kill, inputs=[],
                             outputs=[ASR_startDetection, ASR_result_group, ASR_loadModel])
         ASR_loadModel.click(ASR_components.ASR_model_load_click, inputs=[],
                             outputs=[ASR_startDetection, ASR_result_group, ASR_loadModel])
         ASR_startDetection.click(ASR_components.detection_click, inputs=[audio_components, correct_answer],
                                  outputs=[ASR_result, ASR_CER, ASR_accuracy])
+
+        # CV Action
 
         # style
         # correct_answer.style(container=True)
@@ -153,4 +181,10 @@ def UI():
 
 
 if __name__ == '__main__':
-    UI()
+    # argparse
+    parser = argparse.ArgumentParser("messages")
+    args = parser.parse_args()
+
+    args.category_list = ["bottle", "carton", "peel"]
+
+    UI(args)

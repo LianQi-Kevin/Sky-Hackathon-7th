@@ -102,39 +102,6 @@ _COLORS = np.array(
 ).astype(np.float32).reshape(-1, 3)
 
 
-def vis(img, boxes, scores, cls_ids, conf=0.5, class_names=None):
-    for i in range(len(boxes)):
-        box = boxes[i]
-        cls_id = int(cls_ids[i])
-        score = scores[i]
-        if score < conf:
-            continue
-        x0 = int(box[0])
-        y0 = int(box[1])
-        x1 = int(box[2])
-        y1 = int(box[3])
-
-        color = (_COLORS[cls_id] * 255).astype(np.uint8).tolist()
-        text = '{}:{:.1f}%'.format(class_names[cls_id], score * 100)
-        txt_color = (0, 0, 0) if np.mean(_COLORS[cls_id]) > 0.5 else (255, 255, 255)
-        font = cv2.FONT_HERSHEY_SIMPLEX
-
-        txt_size = cv2.getTextSize(text, font, 0.4, 1)[0]
-        cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-
-        txt_bk_color = (_COLORS[cls_id] * 255 * 0.7).astype(np.uint8).tolist()
-        cv2.rectangle(
-            img,
-            (x0, y0 + 1),
-            (x0 + txt_size[0] + 1, y0 + int(1.5*txt_size[1])),
-            txt_bk_color,
-            -1
-        )
-        cv2.putText(img, text, (x0, y0 + txt_size[1]), font, 0.4, txt_color, thickness=1)
-
-    return img
-
-
 @logger.catch
 class YOLOV7_TRT_Detection(object):
     def __init__(self, engine_file_path, cls_list, batch_size=1, fp16=False):
@@ -179,11 +146,37 @@ class YOLOV7_TRT_Detection(object):
     def visual(self, output, img, cls_conf=0.35):
         if len(output) == 0:
             return img
-        bandboxes, scores, classes = self.remapping_result(output, img)
+        else:
+            bandboxes, scores, classes = self.remapping_result(output, img)
+            for i in range(len(bandboxes)):
+                box = bandboxes[i]
+                cls_id = int(classes[i])
+                score = scores[i]
+                if score < cls_conf:
+                    continue
+                x0 = int(box[0])
+                y0 = int(box[1])
+                x1 = int(box[2])
+                y1 = int(box[3])
 
-        vis_res = vis(img=img, boxes=bandboxes, scores=scores, cls_ids=classes,
-                      conf=cls_conf, class_names=self.cls_list)
-        return vis_res
+                color = (_COLORS[cls_id] * 255).astype(np.uint8).tolist()
+                text = '{}:{:.1f}%'.format(self.cls_list[cls_id], score * 100)
+                txt_color = (0, 0, 0) if np.mean(_COLORS[cls_id]) > 0.5 else (255, 255, 255)
+                font = cv2.FONT_HERSHEY_SIMPLEX
+
+                txt_size = cv2.getTextSize(text, font, 0.4, 1)[0]
+                cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
+
+                txt_bk_color = (_COLORS[cls_id] * 255 * 0.7).astype(np.uint8).tolist()
+                cv2.rectangle(
+                    img,
+                    (x0, y0 + 1),
+                    (x0 + txt_size[0] + 1, y0 + int(1.5*txt_size[1])),
+                    txt_bk_color,
+                    -1
+                )
+                cv2.putText(img, text, (x0, y0 + txt_size[1]), font, 0.4, txt_color, thickness=1)
+            return img
 
     # 重映射推理结果
     def remapping_result(self, output, img):
@@ -255,25 +248,6 @@ class YOLOV7_TRT_Detection(object):
             iou_threshold=nms)
         return detections[nms_out_index]
 
-    def pre_process(self, img: str, swap=(2, 0, 1), un_read: bool = True):
-        if un_read:
-            ST_time = time.time()
-            img = cv2.imread(img, cv2.IMREAD_COLOR)
-            print("img read spend: {}".format(time.time() - ST_time))
-        if len(img.shape) == 3:
-            padded_img = np.ones((self.exp_height, self.exp_width, 3), dtype=np.uint8) * 114
-        else:
-            padded_img = np.ones(self.exp.input_size, dtype=np.uint8) * 114
-
-        r = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
-        resized_img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)),
-                                 interpolation=cv2.INTER_LINEAR).astype(np.uint8)
-        padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
-
-        padded_img = padded_img.transpose(swap)
-        padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
-        return padded_img, r, img
-
     def post_process_batch(self, host_outputs, batch_size=1, conf=0.3, nms=0.45, result_path=None):
         """
         :param result_path:
@@ -329,7 +303,7 @@ class YOLOV7_TRT_Detection(object):
             output[i] = detections[nms_out_index]
         return output
 
-    def pre_process_batch(self, image_list, max_batch=1, swap=(2, 0, 1), un_read=False):
+    def pre_process_batch_yolox(self, image_list, max_batch=1, swap=(2, 0, 1), un_read=False):
         group_num = ceil(len(image_list) / max_batch)
         for num in range(group_num):
             ST_time = time.time()
@@ -352,6 +326,40 @@ class YOLOV7_TRT_Detection(object):
                 # 转换成(3, 640, 640的数组)
                 padded_img = padded_img.transpose(swap)
                 output[index] = padded_img
+                # print("once time: {}".format(time.time() - once_time))
+            output = np.array(output)
+            # 转换数组位置到内存连续， 加速调用
+            print("preprocess batch: {}".format(time.time() - ST_time))
+            yield [np.ascontiguousarray(output, dtype=np.float32), image_list[num * max_batch: (num * max_batch) + max_batch]]
+
+    def pre_process_batch_yolov7(self, image_list, max_batch=1, swap=(2, 0, 1), un_read=False):
+        group_num = ceil(len(image_list) / max_batch)
+        for num in range(group_num):
+            ST_time = time.time()
+            output = [np.ones((3, self.exp_height, self.exp_width), dtype=np.float32) * 114 for _ in range(max_batch)]
+            for index, img in enumerate(image_list[num * max_batch: (num * max_batch) + max_batch]):
+                # once_time = time.time()
+                if un_read:
+                    # ST_time = time.time()
+                    img = cv2.imread(img, cv2.IMREAD_COLOR)
+                    # print("img read spend: {}".format(time.time() - ST_time))
+                # 创建一个(640, 640, 3)的数组
+                padded_img = np.full((self.exp_height, self.exp_width, 3), fill_value=128, dtype=np.uint8) * 114
+                # 计算图片实际大小和预期大小插值
+                r = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
+                # resize图片
+                resized_img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)),
+                                         interpolation=cv2.INTER_LINEAR).astype(np.uint8)
+                # 填充resized图片到padded_img
+                padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
+                # 转换数据类型
+                padded_img = padded_img.astype(np.float32)
+                # 归一化
+                padded_img /= 255.0
+                # 转换成(3, 640, 640的数组) 即CHW格式
+                padded_img = padded_img.transpose(swap)
+                # CHW 到 NCHW 格式 (only in yolov7) (yolox中无需该项)
+                output[index] = np.expand_dims(padded_img, axis=0)
                 # print("once time: {}".format(time.time() - once_time))
             output = np.array(output)
             # 转换数组位置到内存连续， 加速调用
