@@ -1,13 +1,14 @@
-import os
+# import os
 # import numpy as np
 import gradio as gr
-# os.system("pip3 install gradio")
-# exit()
 # import cv2
 # from PIL import Image
 from ASR_metrics import utils as metrics
 import argparse
-from web_utils.audio_utils import audio_save
+from audio_utils import audio_save
+
+print(gr.__version__)
+exit()
 
 # global variable
 LoadModelType = False

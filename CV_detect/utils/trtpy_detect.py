@@ -104,13 +104,12 @@ _COLORS = np.array(
 
 @logger.catch
 class YOLOV7_TRT_Detection(object):
-    def __init__(self, engine_file_path, cls_list, batch_size=1, fp16=False):
+    def __init__(self, engine_file_path, cls_list, batch_size=1):
         # basic参数
         self.engine_file_path = engine_file_path
         self.engine = self._load_engine()
         print("Successful load {}".format(os.path.basename(self.engine_file_path)))
         self.cls_list = cls_list
-        self.fp16 = fp16
         self.batch_size = batch_size
 
         # exp参数
