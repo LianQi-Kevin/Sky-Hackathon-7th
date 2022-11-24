@@ -12,16 +12,16 @@ def make_parser():
 
 
 def onnx_to_trt(onnx_file, max_batch_size=8, fp16=True):
-    output_file = "{}".format(os.path.splitext(onnx_file)[0])
+    output_file = onnx_file.replace(".onnx", ".trt")
 
     if fp16:
         fp16 = 16
-        output_file = "{}.fp16".format(output_file.split(".")[0])
+        output_file = output_file.replace(".trt", ".fp16.trt")
     else:
         fp16 = 32
 
     if os.path.exists(onnx_file):
-        os.system("onnx2trt {} -o {}.trt  -b {} -d {}".format(onnx_file, output_file, max_batch_size, fp16))
+        os.system("onnx2trt {} -o {}  -b {} -d {}".format(onnx_file, output_file, max_batch_size, fp16))
 
 
 if __name__ == '__main__':
