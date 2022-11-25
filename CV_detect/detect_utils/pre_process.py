@@ -2,9 +2,13 @@ from math import ceil
 import time
 import numpy as np
 import cv2
+import logging
 
 
 def pre_process_batch_yolox(image_list, max_batch=1, img_size=(640, 640), swap=(2, 0, 1), un_read=False):
+    """
+    return: [[preprocessed images], [source images]]
+    """
     exp_width, exp_height = img_size[0], img_size[1]
     group_num = ceil(len(image_list) / max_batch)
     for num in range(group_num):
@@ -27,11 +31,14 @@ def pre_process_batch_yolox(image_list, max_batch=1, img_size=(640, 640), swap=(
             output[index] = padded_img
         output = np.array(output)
         # 转换数组位置到内存连续， 加速调用
-        print("preprocess batch: {}".format(time.time() - ST_time))
+        logging.debug("preprocess batch: {}s".format(time.time() - ST_time))
         yield [np.ascontiguousarray(output, dtype=np.float32), image_list[num * max_batch: (num * max_batch) + max_batch]]
 
 
 def pre_process_batch_yolov7(image_list, max_batch=1, img_size=(640, 640), swap=(2, 0, 1), un_read=False):
+    """
+    return: [[preprocessed images], [source images]]
+    """
     exp_width, exp_height = img_size[0], img_size[1]
     group_num = ceil(len(image_list) / max_batch)
     for num in range(group_num):
@@ -55,9 +62,13 @@ def pre_process_batch_yolov7(image_list, max_batch=1, img_size=(640, 640), swap=
             padded_img /= 255.0
             # 转换成(3, 640, 640的数组) 即CHW格式
             padded_img = padded_img.transpose(swap)
-            # CHW 到 NCHW 格式 (only in yolov7) (yolox中无需该项)
-            output[index] = np.expand_dims(padded_img, axis=0)
-        output = np.array(output)
+            output[index] = padded_img
+        # CHW 到 NCHW 格式
+        # for index in range(len(output)):
+        #     output[index] = np.expand_dims(output[index], axis=0)
+        output = [np.expand_dims(out, axis=0) for out in output]
+
+        output = np.array(output, dtype=np.float32)
         # 转换数组位置到内存连续， 加速调用
-        print("preprocess batch: {}".format(time.time() - ST_time))
+        logging.debug("preprocess batch: {}s".format(time.time() - ST_time))
         yield [np.ascontiguousarray(output, dtype=np.float32), image_list[num * max_batch: (num * max_batch) + max_batch]]

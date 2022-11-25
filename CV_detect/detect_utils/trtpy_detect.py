@@ -1,19 +1,16 @@
 import os
-import time
-from math import ceil
-
 import cv2
 import numpy as np
-import pycuda.driver as cuda
 import pycuda.autoinit
+import pycuda.driver as cuda
 import tensorrt as trt
 from torch import cat as torch_cat
 from torch import max as torch_max
 from torch.tensor import Tensor
 from torchvision.ops import batched_nms
 from loguru import logger
-from copy import copy
-
+import logging
+import threading
 
 # Global var
 _COLORS = np.array(
@@ -103,45 +100,56 @@ _COLORS = np.array(
 
 
 @logger.catch
-class YOLOV7_TRT_Detection(object):
-    def __init__(self, engine_file_path, cls_list, batch_size=1):
-        # basic参数
+class TRT_Detection(object):
+    def __init__(self, engine_file_path, cls_list, batch_size=1, exp_size=(640, 640)):
+        # threading context
+        # 创建一个上下文堆栈
+        # https://documen.tician.de/pycuda/driver.html#pycuda.driver.Context
+        self.cfx = cuda.Device(0).make_context()
+
+        # Load engine
         self.engine_file_path = engine_file_path
         self.engine = self._load_engine()
-        print("Successful load {}".format(os.path.basename(self.engine_file_path)))
+        logging.info("Successful load {}".format(os.path.basename(self.engine_file_path)))
+
+        # basic var
         self.cls_list = cls_list
-        self.batch_size = batch_size
-
-        # exp参数
-        self.exp_height = 640
-        self.exp_width = 640
         self.num_classes = len(self.cls_list)
+        self.batch_size = batch_size
+        self.exp_height = exp_size[1]
+        self.exp_width = exp_size[0]
 
-        # detect参数
+        # detect var
         self.host_inputs = []
         self.cuda_inputs = []
         self.host_outputs = []
         self.cuda_outputs = []
         self.bindings = []
-        self.stream = cuda.Stream(0)
+        self.stream = cuda.Stream()
         self.context = self._create_context()
 
     def detect(self, img_resized):
+        threading.Thread.__init__(self)
+        # 推到栈顶
+        # https://documen.tician.de/pycuda/driver.html#pycuda.driver.Context.push
+        self.cfx.push()
         np.copyto(self.host_inputs[0], img_resized.ravel())
         # 将处理好的图片从CPU内存中复制到GPU显存
-        cuda.memcpy_htod_async(
-            self.cuda_inputs[0], self.host_inputs[0], self.stream)
+        cuda.memcpy_htod_async(self.cuda_inputs[0], self.host_inputs[0], self.stream)
         # 开始执行推理任务
         self.context.execute_async(
             batch_size=self.batch_size,
             bindings=self.bindings,
             stream_handle=self.stream.handle)
         # 将推理结果输出从GPU显存复制到CPU内存
-        cuda.memcpy_dtoh_async(
-            self.host_outputs[0], self.cuda_outputs[0], self.stream)
+        cuda.memcpy_dtoh_async(self.host_outputs[0], self.cuda_outputs[0], self.stream)
+        self.stream.synchronize()
         return self.host_outputs[0]
 
     def visual(self, output, img, cls_conf=0.35):
+        """
+        visual single img, put text and conf
+        """
         if len(output) == 0:
             return img
         else:
@@ -162,23 +170,20 @@ class YOLOV7_TRT_Detection(object):
                 txt_color = (0, 0, 0) if np.mean(_COLORS[cls_id]) > 0.5 else (255, 255, 255)
                 font = cv2.FONT_HERSHEY_SIMPLEX
 
-                txt_size = cv2.getTextSize(text, font, 0.4, 1)[0]
+                text_size = cv2.getTextSize(text, font, 0.4, 1)[0]
                 cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-
                 txt_bk_color = (_COLORS[cls_id] * 255 * 0.7).astype(np.uint8).tolist()
-                cv2.rectangle(
-                    img,
-                    (x0, y0 + 1),
-                    (x0 + txt_size[0] + 1, y0 + int(1.5*txt_size[1])),
-                    txt_bk_color,
-                    -1
-                )
-                cv2.putText(img, text, (x0, y0 + txt_size[1]), font, 0.4, txt_color, thickness=1)
+                cv2.rectangle(img, (x0, y0 + 1), (x0 + text_size[0] + 1, y0 + int(1.5 * text_size[1])), txt_bk_color, -1)
+                cv2.putText(img, text, (x0, y0 + text_size[1]), font, 0.4, txt_color, thickness=1)
             return img
 
     # 重映射推理结果
     def remapping_result(self, output, img):
-        # print(output)
+        """
+        remapping result for single img
+        :param output: a list, postprocess_outputs[index]
+        :param img: a np array, cv2 img
+        """
         output = np.array(output, dtype=object)
         ratio = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
         bandboxes = output[:, 0:4]
@@ -191,7 +196,7 @@ class YOLOV7_TRT_Detection(object):
     # 反序列化引擎
     def _load_engine(self):
         assert os.path.exists(self.engine_file_path), "{} not found".format(self.engine_file_path)
-        print("Reading engine from file {}".format(self.engine_file_path))
+        logging.info("Load engine from {}".format(self.engine_file_path))
         with open(self.engine_file_path, "rb") as f, trt.Runtime(trt.Logger()) as runtime:
             return runtime.deserialize_cuda_engine(f.read())
 
@@ -210,42 +215,6 @@ class YOLOV7_TRT_Detection(object):
                 self.host_outputs.append(host_mem)
                 self.cuda_outputs.append(cuda_mem)
         return self.engine.create_execution_context()
-
-    # def post_process(self, host_outputs, conf=0.3, nms=0.45):
-    #     """
-    #     :param conf:
-    #     :param nms:
-    #     :param host_outputs x, y, w, h, conf, cls1, cls2, cls3, cls4 ······
-    #     :return [[x1, y1, x2, y2, scores, cls_name], [x1, y1, x2, y2, scores, cls_name], ···]
-    #     """
-    #
-    #     # xywh2xyxy (4ms)
-    #     # team_num = self.exp.num_classes + 5
-    #     team_num = self.num_classes + 5
-    #     prediction = host_outputs.reshape(int(host_outputs.shape[0] / team_num), team_num)
-    #     box_corner = np.zeros(prediction.shape)
-    #     box_corner[:, 0] = prediction[:, 0] - prediction[:, 2] / 2
-    #     box_corner[:, 1] = prediction[:, 1] - prediction[:, 3] / 2
-    #     box_corner[:, 2] = prediction[:, 0] + prediction[:, 2] / 2
-    #     box_corner[:, 3] = prediction[:, 1] + prediction[:, 3] / 2
-    #     prediction[:, :4] = box_corner[:, :4]
-    #     prediction = Tensor(prediction)
-    #
-    #     # get 8400 detections (9ms)
-    #     image_pred = prediction
-    #     class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)
-    #     conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= conf).squeeze()
-    #     detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(25200, 1) * class_conf, class_pred.float()],
-    #                            dim=1)
-    #     detections = detections[conf_mask]
-    #
-    #     # iou nms (1.49ms)
-    #     nms_out_index = batched_nms(
-    #         boxes=detections[:, :4],
-    #         scores=detections[:, 4],
-    #         idxs=detections[:, 5],
-    #         iou_threshold=nms)
-    #     return detections[nms_out_index]
 
     def post_process_batch(self, host_outputs, batch_size=1, conf=0.3, nms=0.45, result_path=None):
         """
@@ -304,6 +273,13 @@ class YOLOV7_TRT_Detection(object):
         del self.stream
         del self.cuda_outputs
         del self.cuda_inputs
+        del self.cfx
+
+    # 销毁存储的可推理上下文
+    def destroy(self):
+        # 销毁上下文
+        # https://documen.tician.de/pycuda/driver.html#pycuda.driver.Context.detach
+        self.cfx.detach()
 
 
 if __name__ == '__main__':
