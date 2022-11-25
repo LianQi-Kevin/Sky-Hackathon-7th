@@ -139,7 +139,6 @@ class YOLOV7_TRT_Detection(object):
         # 将推理结果输出从GPU显存复制到CPU内存
         cuda.memcpy_dtoh_async(
             self.host_outputs[0], self.cuda_outputs[0], self.stream)
-        # print("detect finish, time: {}".format(time.time()))
         return self.host_outputs[0]
 
     def visual(self, output, img, cls_conf=0.35):
@@ -179,6 +178,7 @@ class YOLOV7_TRT_Detection(object):
 
     # 重映射推理结果
     def remapping_result(self, output, img):
+        # print(output)
         output = np.array(output, dtype=object)
         ratio = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
         bandboxes = output[:, 0:4]
@@ -211,48 +211,48 @@ class YOLOV7_TRT_Detection(object):
                 self.cuda_outputs.append(cuda_mem)
         return self.engine.create_execution_context()
 
-    def post_process(self, host_outputs, conf=0.3, nms=0.45):
-        """
-        :param conf:
-        :param nms:
-        :param host_outputs x, y, w, h, conf, cls1, cls2, cls3, cls4 ······
-        :return [[x1, y1, x2, y2, scores, cls_name], [x1, y1, x2, y2, scores, cls_name], ···]
-        """
-
-        # xywh2xyxy (4ms)
-        # team_num = self.exp.num_classes + 5
-        team_num = self.num_classes + 5
-        prediction = host_outputs.reshape(int(host_outputs.shape[0] / team_num), team_num)
-        box_corner = np.zeros(prediction.shape)
-        box_corner[:, 0] = prediction[:, 0] - prediction[:, 2] / 2
-        box_corner[:, 1] = prediction[:, 1] - prediction[:, 3] / 2
-        box_corner[:, 2] = prediction[:, 0] + prediction[:, 2] / 2
-        box_corner[:, 3] = prediction[:, 1] + prediction[:, 3] / 2
-        prediction[:, :4] = box_corner[:, :4]
-        prediction = Tensor(prediction)
-
-        # get 8400 detections (9ms)
-        image_pred = prediction
-        class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)
-        conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= conf).squeeze()
-        detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(25200, 1) * class_conf, class_pred.float()],
-                               dim=1)
-        detections = detections[conf_mask]
-
-        # iou nms (1.49ms)
-        nms_out_index = batched_nms(
-            boxes=detections[:, :4],
-            scores=detections[:, 4],
-            idxs=detections[:, 5],
-            iou_threshold=nms)
-        return detections[nms_out_index]
+    # def post_process(self, host_outputs, conf=0.3, nms=0.45):
+    #     """
+    #     :param conf:
+    #     :param nms:
+    #     :param host_outputs x, y, w, h, conf, cls1, cls2, cls3, cls4 ······
+    #     :return [[x1, y1, x2, y2, scores, cls_name], [x1, y1, x2, y2, scores, cls_name], ···]
+    #     """
+    #
+    #     # xywh2xyxy (4ms)
+    #     # team_num = self.exp.num_classes + 5
+    #     team_num = self.num_classes + 5
+    #     prediction = host_outputs.reshape(int(host_outputs.shape[0] / team_num), team_num)
+    #     box_corner = np.zeros(prediction.shape)
+    #     box_corner[:, 0] = prediction[:, 0] - prediction[:, 2] / 2
+    #     box_corner[:, 1] = prediction[:, 1] - prediction[:, 3] / 2
+    #     box_corner[:, 2] = prediction[:, 0] + prediction[:, 2] / 2
+    #     box_corner[:, 3] = prediction[:, 1] + prediction[:, 3] / 2
+    #     prediction[:, :4] = box_corner[:, :4]
+    #     prediction = Tensor(prediction)
+    #
+    #     # get 8400 detections (9ms)
+    #     image_pred = prediction
+    #     class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)
+    #     conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= conf).squeeze()
+    #     detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(25200, 1) * class_conf, class_pred.float()],
+    #                            dim=1)
+    #     detections = detections[conf_mask]
+    #
+    #     # iou nms (1.49ms)
+    #     nms_out_index = batched_nms(
+    #         boxes=detections[:, :4],
+    #         scores=detections[:, 4],
+    #         idxs=detections[:, 5],
+    #         iou_threshold=nms)
+    #     return detections[nms_out_index]
 
     def post_process_batch(self, host_outputs, batch_size=1, conf=0.3, nms=0.45, result_path=None):
         """
         :param result_path:
         :param conf:
         :param nms:
-        :param host_outputs x, y, w, h, conf, cls1, cls2, cls3, cls4 ······
+        :param host_outputs: x, y, w, h, conf, cls1, cls2, cls3, cls4 ······
         :param batch_size:
         :return [[x1, y1, x2, y2, scores, cls_name], [x1, y1, x2, y2, scores, cls_name], ···]
         """
@@ -260,7 +260,6 @@ class YOLOV7_TRT_Detection(object):
             np.save("{}.npy".format(self.engine_file_path), host_outputs)
 
         # xywh2xyxy (4ms)
-        # team_num = self.exp.num_classes + 5
         team_num = self.num_classes + 5
         prediction = host_outputs.reshape(batch_size, int(host_outputs.shape[0] / team_num / batch_size), team_num)
         box_corner = np.zeros(prediction.shape)
@@ -275,10 +274,6 @@ class YOLOV7_TRT_Detection(object):
         # get detections
         output = [None for _ in range(len(prediction))]
         for i, image_pred in enumerate(prediction):
-            if i == 0:
-                with open("data.txt", "w") as f:
-                    f.write(str(copy(image_pred).tolist()))
-
             # torch.max方法 提取类conf最高的值及其索引位置
             class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)
             # conf * class_conf, squeeze() 消除所有空白维度 eg:(2, 1, 2, 2, 1) -> (2, 2, 2)
@@ -287,8 +282,9 @@ class YOLOV7_TRT_Detection(object):
             # 拆分维度并整理
             # int(host_outputs.shape[0] / team_num / batch_size) 从 1*25200*85 还原到 25200
             # 转成[[x1, y1, x2, y2, score, idx], [x1, y1, x2, y2, score, idx], ...]
-            detections = torch_cat([image_pred[:, :4], image_pred[:, 4].reshape(int(host_outputs.shape[0] / team_num / batch_size), 1) * class_conf, class_pred.float()],
-                                   dim=1)
+            detections = torch_cat([image_pred[:, :4],
+                                    image_pred[:, 4].reshape(int(host_outputs.shape[0] / team_num / batch_size), 1) * class_conf,
+                                    class_pred.float()], dim=1)
             # 如果conf_mask为True, 则使用, 否则None
             detections = detections[conf_mask]
 
@@ -301,69 +297,6 @@ class YOLOV7_TRT_Detection(object):
 
             output[i] = detections[nms_out_index]
         return output
-
-    def pre_process_batch_yolox(self, image_list, max_batch=1, swap=(2, 0, 1), un_read=False):
-        group_num = ceil(len(image_list) / max_batch)
-        for num in range(group_num):
-            ST_time = time.time()
-            output = [np.ones((3, self.exp_height, self.exp_width), dtype=np.float32) * 114 for _ in range(max_batch)]
-            for index, img in enumerate(image_list[num * max_batch: (num * max_batch) + max_batch]):
-                # once_time = time.time()
-                if un_read:
-                    # ST_time = time.time()
-                    img = cv2.imread(img, cv2.IMREAD_COLOR)
-                    # print("img read spend: {}".format(time.time() - ST_time))
-                # 创建一个(640, 640, 3)的数组
-                padded_img = np.ones((self.exp_height, self.exp_width, 3), dtype=np.uint8) * 114
-                # 计算图片实际大小和预期大小插值
-                r = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
-                # resize图片
-                resized_img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)),
-                                         interpolation=cv2.INTER_LINEAR).astype(np.uint8)
-                # 填充resized图片到padded_img
-                padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
-                # 转换成(3, 640, 640的数组)
-                padded_img = padded_img.transpose(swap)
-                output[index] = padded_img
-                # print("once time: {}".format(time.time() - once_time))
-            output = np.array(output)
-            # 转换数组位置到内存连续， 加速调用
-            print("preprocess batch: {}".format(time.time() - ST_time))
-            yield [np.ascontiguousarray(output, dtype=np.float32), image_list[num * max_batch: (num * max_batch) + max_batch]]
-
-    def pre_process_batch_yolov7(self, image_list, max_batch=1, swap=(2, 0, 1), un_read=False):
-        group_num = ceil(len(image_list) / max_batch)
-        for num in range(group_num):
-            ST_time = time.time()
-            output = [np.ones((3, self.exp_height, self.exp_width), dtype=np.float32) * 114 for _ in range(max_batch)]
-            for index, img in enumerate(image_list[num * max_batch: (num * max_batch) + max_batch]):
-                # once_time = time.time()
-                if un_read:
-                    # ST_time = time.time()
-                    img = cv2.imread(img, cv2.IMREAD_COLOR)
-                    # print("img read spend: {}".format(time.time() - ST_time))
-                # 创建一个(640, 640, 3)的数组
-                padded_img = np.full((self.exp_height, self.exp_width, 3), fill_value=128, dtype=np.uint8) * 114
-                # 计算图片实际大小和预期大小插值
-                r = min(self.exp_height / img.shape[0], self.exp_width / img.shape[1])
-                # resize图片
-                resized_img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)),
-                                         interpolation=cv2.INTER_LINEAR).astype(np.uint8)
-                # 填充resized图片到padded_img
-                padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
-                # 转换数据类型
-                padded_img = padded_img.astype(np.float32)
-                # 归一化
-                padded_img /= 255.0
-                # 转换成(3, 640, 640的数组) 即CHW格式
-                padded_img = padded_img.transpose(swap)
-                # CHW 到 NCHW 格式 (only in yolov7) (yolox中无需该项)
-                output[index] = np.expand_dims(padded_img, axis=0)
-                # print("once time: {}".format(time.time() - once_time))
-            output = np.array(output)
-            # 转换数组位置到内存连续， 加速调用
-            print("preprocess batch: {}".format(time.time() - ST_time))
-            yield [np.ascontiguousarray(output, dtype=np.float32), image_list[num * max_batch: (num * max_batch) + max_batch]]
 
     # 释放引擎，释放GPU显存，释放CUDA流
     def __del__(self):
