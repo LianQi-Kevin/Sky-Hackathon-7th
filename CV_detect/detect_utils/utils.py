@@ -1,7 +1,10 @@
 import logging
 import os
 import argparse
+import cv2
 from glob import glob
+from tqdm import tqdm
+import threading
 
 
 # logging set
@@ -62,3 +65,24 @@ def to_mAP(bandboxes: list, scores: list, classes: list, class_list: list) -> li
     return outputs
 
 
+def _multi_load(index: int, video):
+    global frame_list
+    frame_list[index] = video.read()[1]
+
+
+# Video frame read
+def video_load(file_path: str) -> tuple:
+    """
+    :return (frame_width, frame_height), fps, num_frames, frame_list
+    """
+    global frame_list
+    assert os.path.exists(file_path), "{} not Found".format(file_path)
+    video = cv2.VideoCapture(file_path)
+    frame_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = video.get(cv2.CAP_PROP_FPS)
+    num_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
+    frame_list = [None for _ in range(num_frames)]
+    for index in tqdm(range(num_frames)):
+        frame_list[index] = video.read()[1]
+    return (frame_width, frame_height), fps, num_frames, frame_list
