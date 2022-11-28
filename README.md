@@ -3,8 +3,8 @@
 
 其分为三个部分：CV 、ASR 和 WebUI，CV部分实现了mAP和FPS的获取，项目在 Jetson Nano 上完成了其全部的部署和测试，采用将`预处理`、`检测`、`后处理`三个阶段封装到多线程以进行提速。
 
-#### Step 1. -  CV
-Folder: `CV_detect`
+#### 1. CV
+Project folder: CV_detect
 1. `serial_detect.py`: 串行推理
 2. `multi_thread_detect.py`: 多线程推理, 封装各阶段函数到子线程。
 3. `detect_utils/trtpy_detect.py`: TRT_Detection 类，完成模型加载等操作
@@ -17,7 +17,26 @@ Folder: `CV_detect`
 
 6. `detect_utils/utils.py`: 一些小工具
 
+Training Dataset: https://app.roboflow.com/hackathon-7th/final-zoqnw/5 \
+Category: `['CARDBOARD', 'banana', 'bottle']`
+
+> 模型导出onnx参考 [tensorRT_Pro](https://github.com/shouxieai/tensorRT_Pro) 进行修改
+
+#### 2. ASR
+Project folder: ASR
+1. `nemo_install.sh`: Nemo 环境安装脚本 (NX平台需要使用`nemo 1.2.0`版本)
+2. `train_utils/train_asr.py`: ASR模型训练脚本, 
+   默认使用`stt_zh_citrinet_512`模型
+
+#### 3. WebUI
+Project folder: gradio_web_utils
+1. `WebUI.py`: 页面脚本
+
+> 2022-11-22. Gradio不能在Jetson Nano默认的python3.6环境下使用，至少需要python>=3.7
+
 
 ---
-> ##### Note
-> 1. 2022-11-22. Gradio can't used in Jetson Nano default python3.6 environments, it needs at least python>=3.7
+#### 参考资料
+1. 编译`trtexec`工具: https://github.com/NVIDIA/TensorRT/tree/master/samples/trtexec#building-trtexec
+2. shouxieai/tensorRT_Pro: https://github.com/shouxieai/tensorRT_Pro
+3. 制作`nemo`训练数据集: https://github.com/LianQi-Kevin/nemo-dataset-create
