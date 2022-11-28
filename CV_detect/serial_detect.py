@@ -9,15 +9,6 @@ from detect_utils.utils import log_set, get_image_list, make_args
 from detect_utils.post_process import post_process_batch
 
 
-# def get_ratio(img_group: list, exp_size=(640, 640)) -> list:
-#     output = [None for _ in range(len(img_group))]
-#     exp_height, exp_width = exp_size[0], exp_size[1]
-#     for index, img in enumerate(img_group):
-#         height, width, channel = img.shape
-#         output[index] = min(exp_height / height, exp_width / height)
-#     return output
-
-
 def _main(args):
     # path
     args.result_path = "./result_images"
@@ -75,7 +66,7 @@ if __name__ == '__main__':
     # args.trt_path = "models/yolov7_rep/yolov7_rep_grid_simplify.fp16.trt"
     args.trt_path = "models/yolov7_tiny/yolov7-tiny-rep.fp16.engine"
     args.batch_size = 8
-    args.cls_list = ['CARDBOARD', 'banan', 'bottle']
+    args.cls_list = ['CARDBOARD', 'banana', 'bottle']
     args.conf = 0.1
     args.nms = 0.45
 

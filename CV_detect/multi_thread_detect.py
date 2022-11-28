@@ -159,7 +159,7 @@ def detect_images():
 
 def detect_video(write=False):
     global preprocessed_img_group, postprocess_result_group, detection, args
-    args.video_path = "./7th_test_folder/videos/test_video.mp4"
+    args.video_path = "./infer_folder/videos/test_video.mp4"
     args.result_path = "./result_video.mp4"
 
     logging.debug("Start load video")

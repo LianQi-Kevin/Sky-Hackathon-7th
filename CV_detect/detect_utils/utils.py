@@ -86,22 +86,3 @@ def video_frames_load(file_path: str) -> tuple:
     for index in tqdm(range(num_frames)):
         frame_list[index] = video.read()[1]
     return (frame_width, frame_height), fps, num_frames, frame_list
-
-
-def batched_nms(boxes: Tensor,
-                scores: Tensor,
-                idxs: Tensor,
-                iou_threshold: float,
-                ) -> Tensor:
-    if boxes.numel() == 0:
-        return torch.empty((0,), dtype=torch.int64, device=boxes.device)
-    # strategy: in order to perform NMS independently per class.
-    # we add an offset to all the boxes. The offset is dependent
-    # only on the class idx, and is large enough so that boxes
-    # from different classes do not overlap
-    else:
-        max_coordinate = boxes.max()
-        offsets = idxs.to(boxes) * (max_coordinate + torch.tensor(1).to(boxes))
-        boxes_for_nms = boxes + offsets[:, None]
-        keep = nms(boxes_for_nms, scores, iou_threshold)
-        return keep
