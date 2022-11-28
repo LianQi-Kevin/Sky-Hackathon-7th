@@ -242,6 +242,7 @@ class TRT_Detection(object):
 
         # get detections
         output = [None for _ in range(len(prediction))]
+        print(len(output))
         for i, image_pred in enumerate(prediction):
             # torch.max方法 提取类conf最高的值及其索引位置
             class_conf, class_pred = torch_max(image_pred[:, 5: team_num], dim=1, keepdim=True)

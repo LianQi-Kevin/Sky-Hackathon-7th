@@ -12,6 +12,7 @@ sys.path.append('/home/nvidia/7th_Hackathon/CV_detect')
 from detect_utils.pre_process import preprocess_yolov7_batch_images
 from detect_utils.trtpy_detect import TRT_Detection
 from detect_utils.utils import log_set, get_image_list, make_args, to_mAP, video_frames_load
+from detect_utils.post_process import post_process_batch
 
 # Global var
 video_frame_group = list()
@@ -58,9 +59,20 @@ def multi_thread_postprocess(batch_size=1, conf=0.3, nms=0.45):
         while postprocess_result_group[index] is None:
             time.sleep(0.01)
         logging.debug("Start postprocess group {}".format(index))
-        output = detection.post_process_batch(host_outputs=postprocess_result_group[index],
-                                              batch_size=batch_size, conf=conf, nms=nms)
-        output = [out.tolist() for out in output]
+        # output = detection.post_process_batch(host_outputs=postprocess_result_group[index],
+        #                                       batch_size=batch_size, conf=conf, nms=nms)
+        output = post_process_batch(host_outputs=postprocess_result_group[index],
+                                    batch_size=batch_size, conf=conf, nms=nms, num_class=3)
+        # logging.warning(output)
+        # logging.warning(index)
+        if len(output) == 0:
+            print(output)
+        # output = [out.tolist() for out in output]
+        for num in range(len(output)):
+            if output[num] is not None:
+                output[num] = output[num].tolist()
+            else:
+                output[num] = []
         visual_result_group[index] = deepcopy(output)
         logging.info("Finish postprocess group {}".format(index))
 
@@ -94,37 +106,6 @@ def multi_thread_visual_img(img_path_list, batch_size=1, img_result_path="./resu
                 else:
                     mAP_f.write("")
                 mAP_f.close()
-
-        logging.info("Finish visual group {}".format(index))
-
-
-# 封装画图函数到多线程样式
-def multi_thread_visual_video(img_path_list, batch_size=1, video_result_path="./video_result.mp4"):
-    global preprocessed_img_group, visual_result_group, detection, args
-    for index in range(len(visual_result_group)):
-        while visual_result_group[index] is None:
-            time.sleep(0.01)
-        # logging.debug("Start visual group {}".format(index))
-        # images_path = img_path_list[index * batch_size: index * batch_size + batch_size]
-        # for single_out, source_img in zip(visual_result_group[index], preprocessed_img_group[index][1]):
-        #     # write img
-        #     vis_img = deepcopy(detection.visual(single_out, source_img, cls_conf=0.35))
-        #     write_path = os.path.join(img_result_path, os.path.basename(img_path))
-        #     cv2.imwrite(write_path, vis_img)
-        #
-        #     # write mAP
-        #     txt_path = os.path.join(mAP_result_path, "{}.txt".format(os.path.splitext(os.path.basename(img_path))[0]))
-        #     with open(txt_path, "w") as mAP_f:
-        #         if single_out:
-        #             bandboxes, scores, classes = detection.remapping_result(single_out, source_img)
-        #             mAP_list = to_mAP(bandboxes, scores, classes, detection.cls_list)
-        #             for text in mAP_list:
-        #                 mAP_f.write("{} {} {} {} {} {}".format(text[0], text[1], text[2], text[3], text[4], text[5]))
-        #                 if text != mAP_list[-1]:
-        #                     mAP_f.write("\n")
-        #         else:
-        #             mAP_f.write("")
-        #         mAP_f.close()
 
         logging.info("Finish visual group {}".format(index))
 
@@ -188,9 +169,9 @@ def detect_video(write=False):
     # set global var
     set_global_var(img_num=len(frame_list), batch_size=args.batch_size)
 
-    # if write:
-    #     fourcc = cv2.VideoWriter_fourcc('M', 'P', '4', 'V')
-    #     videoWriter = cv2.VideoWriter(args.result_path, fourcc, fps, frame_shape)
+    if write:
+        fourcc = cv2.VideoWriter_fourcc('M', 'P', '4', 'V')
+        videoWriter = cv2.VideoWriter(args.result_path, fourcc, fps, frame_shape)
 
     # load model
     detection = TRT_Detection(
@@ -205,29 +186,28 @@ def detect_video(write=False):
     detection_thread = threading.Thread(target=multi_thread_detection)
     # postprocess_thread = threading.Thread(target=multi_thread_postprocess, args=(8, 0.6, 0.45))
 
-    tic = time.time()
+    tic = time.perf_counter()
     preprocess_thread.start()
     detection_thread.start()
     # postprocess_thread.start()
     preprocess_thread.join()
     detection_thread.join()
     # postprocess_thread.join()
-    toc = time.time()
+    toc = time.perf_counter()
     print("fps: {}, spend {}s".format(1 / ((toc - tic) / num_frames), toc - tic))
 
 
 if __name__ == '__main__':
     # logging
-    log_set(screen_show=logging.DEBUG)
+    log_set(screen_show=logging.INFO)
 
     # args
     args = make_args()
 
     # basic var
-    # args.trt_path = "models/yolov7_rep/yolov7_rep_grid_simplify.fp16.trt"
-    args.trt_path = "models/yolov7_rep2/0v7_hack_as_rep_bs8.fp16.trt"
+    args.trt_path = "models/yolov7_rep/yolov7_rep_grid_simplify.fp16.trt"
     args.batch_size = 8
-    args.cls_list = ['CARDBOARD', 'banane', 'bottle']
+    args.cls_list = ['CARDBOARD', 'banana', 'bottle']
     args.conf = 0.1
     args.nms = 0.45
     args.detect_type = "img"
